@@ -10,6 +10,65 @@ on:
   issues:
     types: [opened, reopened]
 
+  workflow_dispatch:
+    inputs:
+      iscustom:
+        description: "设置为 true 启用自定义编译"
+        type: boolean
+        default: true
+      model:
+        description: "DSM 机型（例如 DS920+）"
+        type: string
+        required: false
+      version:
+        description: "DSM 版本（例如 7.2.1-69057）"
+        type: string
+        required: false
+      format:
+        description: "输出格式（img/ova/vmdk等）"
+        type: string
+        default: ""
+      size:
+        description: "镜像大小（2GB/4GB/8GB）"
+        type: choice
+        options:
+          - 2GB
+          - 4GB
+          - 8GB
+        default: 2GB
+      language:
+        description: "设置语言（如 zh_CN）"
+        type: string
+        default: ""
+      template:
+        description: "是否清空 SN/MAC 作为模板"
+        type: boolean
+        default: false
+      sn:
+        description: "自定义 SN"
+        type: string
+        default: ""
+      macs:
+        description: "自定义 MAC（逗号分隔）"
+        type: string
+        default: ""
+      tips:
+        description: "AddTips 内容"
+        type: string
+        default: ""
+      kernel:
+        description: "自定义 kernel（custom 或空）"
+        type: string
+        default: ""
+      addons:
+        description: "addons 列表（A:B,C:D）"
+        type: string
+        default: ""
+      modules:
+        description: "modules 列表（逗号分隔）"
+        type: string
+        default: ""
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,11 +95,7 @@ jobs:
               subprocess.call(f'echo "{value}" >> $GITHUB_ENV', shell=True)
               subprocess.call(f'echo "EOF" >> $GITHUB_ENV', shell=True)
   
-          issuetitle = """${{ github.event.issue.title }}"""
-          issuebody = """${{ github.event.issue.body }}"""
-
-          iscustom = 'false'
-          warinfo = 'false'
+          event_name = os.environ.get('GITHUB_EVENT_NAME', '')
 
           fields = {
             "format": "",
@@ -57,26 +112,38 @@ jobs:
             "modules": ""
           }
 
-          try:
-            if issuetitle.strip().lower().startswith('custom'):
-              jsonbody = json.loads(issuebody)
-              iscustom = 'true'
-              for k in fields:
-                fields[k] = jsonbody.get(k, "")
-          except Exception:
-            pass
+          iscustom = 'false'
+          warinfo = 'false'
 
-          if iscustom == 'false':
-            if not any(x in issuebody for x in ['DMI', 'CPU', 'NIC']):
-              warinfo = 'true'
+          if event_name == 'workflow_dispatch':
+            iscustom = 'true' if os.environ.get('INPUT_ISCUSTOM', 'true').lower() == 'true' else 'false'
+            for k in fields:
+              env_name = f'INPUT_{k.upper()}'
+              fields[k] = os.environ.get(env_name, "")
+          else:
+            issuetitle = """${{ github.event.issue.title }}"""
+            issuebody = """${{ github.event.issue.body }}"""
+            try:
+              if issuetitle.strip().lower().startswith('custom'):
+                jsonbody = json.loads(issuebody)
+                iscustom = 'true'
+                for k in fields:
+                  fields[k] = jsonbody.get(k, "")
+            except Exception:
+              pass
+
+            if iscustom == 'false':
+              if not any(x in issuebody for x in ['DMI', 'CPU', 'NIC']):
+                warinfo = 'true'
 
           set_env("iscustom", iscustom)
           set_env("warinfo", warinfo)
+          set_env("event_name", event_name)
           for k, v in fields.items():
             set_env(k, v)
 
       - name: Update Comment Warinfo
-        if: env.warinfo == 'true'
+        if: env.warinfo == 'true' && github.event_name == 'issues'
         uses: actions-cool/issues-helper@v3
         with:
           actions: "create-comment"
@@ -122,7 +189,7 @@ jobs:
           emoji: heart
 
       - name: Update Comment Labels
-        if: env.iscustom == 'true'
+        if: env.iscustom == 'true' && github.event_name == 'issues'
         uses: actions-cool/issues-helper@v3
         with:
           actions: 'add-labels'
@@ -131,7 +198,7 @@ jobs:
           labels: 'custom,${{ env.model }}'
 
       - name: Update Comment Building
-        if: env.iscustom == 'true'
+        if: env.iscustom == 'true' && github.event_name == 'issues'
         id: comment
         uses: actions-cool/issues-helper@v3
         with:
@@ -309,7 +376,7 @@ jobs:
           retention-days: 5
 
       - name: Update Comment Success
-        if: env.iscustom == 'true' && success()
+        if: env.iscustom == 'true' && success() && github.event_name == 'issues'
         uses: actions-cool/issues-helper@v3
         with:
           actions: 'update-comment'
@@ -324,7 +391,7 @@ jobs:
           emoji: hooray
 
       - name: Update Comment Fail
-        if: env.iscustom == 'true' && failure()
+        if: env.iscustom == 'true' && failure() && github.event_name == 'issues'
         uses: actions-cool/issues-helper@v3
         with:
           actions: 'update-comment'
@@ -339,7 +406,7 @@ jobs:
           emoji: confused
 
       - name: Close Issues
-        if: env.iscustom == 'true'
+        if: env.iscustom == 'true' && github.event_name == 'issues'
         uses: actions-cool/issues-helper@v3
         with:
           actions: 'close-issue'
