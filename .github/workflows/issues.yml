@@ -75,6 +75,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@main
+        with:
+          fetch-depth: 0
 
       - name: Init Env
         run: |
@@ -227,125 +229,160 @@ jobs:
           PRERELEASE="true"
 
           TAG=""
-          # Get the latest tag using GitHub API with proper authentication for GitHub Actions
+          
+          # Method 1: Try GitHub API for tags (for prerelease)
           if [ "${PRERELEASE}" = "true" ]; then
-            # Get latest tag using GitHub API with GitHub Actions token
-            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "${REPO}/tags" | jq -r '.[0].name')"
+            echo "Attempting to get latest tag from GitHub API..."
+            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/tags" | jq -r '.[0].name // empty')"
           else
-            # Get latest release tag using GitHub API with GitHub Actions token
-            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "${REPO}/releases/latest" | jq -r '.tag_name')"
+            echo "Attempting to get latest release from GitHub API..."
+            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.tag_name // empty')"
           fi
           
-          # Fallback method: if API fails, use git to get tags (more reliable in Actions)
+          # Method 2: Try parsing HTML tags page (fallback)
           if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
-            echo "API call failed, trying git method..."
-            # Clone the tags only to get the latest one
-            git fetch --tags --quiet
-            # Get the latest tag (sorted by version)
-            TAG="$(git tag -l | grep -v '^$' | sort -rV | head -1)"
+            echo "API method failed, trying HTML parsing method..."
+            TAG="$(curl -skL --connect-timeout 10 "${REPO}/tags" | grep -oP '/refs/tags/[^"]+\.zip' | sed -E 's|/refs/tags/(.*)\.zip.*|\1|' | sort -rV | head -1 || true)"
+          fi
+          
+          # Method 3: Use git tags (fallback)
+          if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
+            echo "HTML parsing failed, trying git tags method..."
+            git fetch --tags --quiet || true
+            TAG="$(git tag -l | grep -v '^$' | sort -rV | head -1 || true)"
           fi
           
           # Clean up tag by removing 'v' prefix if present
-          [ "${TAG:0:1}" = "v" ] && TAG="${TAG:1}"
+          if [ -n "${TAG}" ] && [ "${TAG}" != "null" ]; then
+            [ "${TAG:0:1}" = "v" ] && TAG="${TAG:1}"
+          fi
           
           # Verify TAG was retrieved successfully
           if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
-            echo "Failed to retrieve TAG using all methods"
-            # Hardcode a default TAG as last resort
-            TAG="1.0.0"
-            echo "Using default TAG: ${TAG}"
+            echo "❌ Failed to retrieve TAG using all methods"
+            echo "Available git tags: $(git tag -l | head -5 || echo 'none')"
+            echo "Repository: ${REPO}"
+            exit 1
           fi
           
-          echo "Using TAG: ${TAG}"
-          rm -f rr-${TAG}.img.zip
+          echo "✓ Using TAG: ${TAG}"
+          rm -f rr-*.img.zip rr.img.zip
           
           # Download the file with proper error handling
           DOWNLOAD_URL="${REPO}/releases/download/"
           
           # Try multiple download URL formats
-          download_successful=false
+          download_successful=0
           downloaded_file=""
           
           # Format 1: with v-prefix in tag and URL
-          if [ -z "${download_successful}" ]; then
+          if [ ${download_successful} -eq 0 ]; then
             echo "Trying download URL: ${DOWNLOAD_URL}v${TAG}/rr-${TAG}.img.zip"
-            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}v${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr-${TAG}.img.zip" ]; then
-              download_successful=true
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" -o "rr-${TAG}.img.zip" "${DOWNLOAD_URL}v${TAG}/rr-${TAG}.img.zip" 2>/dev/null || echo "000")
+            if [ ${STATUS:-0} -eq 200 ] && [ -f "rr-${TAG}.img.zip" ] && [ -s "rr-${TAG}.img.zip" ]; then
+              download_successful=1
               downloaded_file="rr-${TAG}.img.zip"
-              echo "✓ Downloaded successfully"
+              echo "✓ Downloaded successfully: ${downloaded_file}"
+            else
+              rm -f "rr-${TAG}.img.zip"
             fi
           fi
           
           # Format 2: without v-prefix
-          if [ -z "${download_successful}" ]; then
+          if [ ${download_successful} -eq 0 ]; then
             echo "Trying download URL: ${DOWNLOAD_URL}${TAG}/rr-${TAG}.img.zip"
-            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr-${TAG}.img.zip" ]; then
-              download_successful=true
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" -o "rr-${TAG}.img.zip" "${DOWNLOAD_URL}${TAG}/rr-${TAG}.img.zip" 2>/dev/null || echo "000")
+            if [ ${STATUS:-0} -eq 200 ] && [ -f "rr-${TAG}.img.zip" ] && [ -s "rr-${TAG}.img.zip" ]; then
+              download_successful=1
               downloaded_file="rr-${TAG}.img.zip"
-              echo "✓ Downloaded successfully"
+              echo "✓ Downloaded successfully: ${downloaded_file}"
+            else
+              rm -f "rr-${TAG}.img.zip"
             fi
           fi
           
           # Format 3: try with different filename pattern (without TAG in filename)
-          if [ -z "${download_successful}" ]; then
+          if [ ${download_successful} -eq 0 ]; then
             echo "Trying download URL: ${DOWNLOAD_URL}v${TAG}/rr.img.zip"
-            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}v${TAG}/rr.img.zip" -o "rr.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ]; then
-              download_successful=true
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" -o "rr.img.zip" "${DOWNLOAD_URL}v${TAG}/rr.img.zip" 2>/dev/null || echo "000")
+            if [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ] && [ -s "rr.img.zip" ]; then
+              download_successful=1
               downloaded_file="rr.img.zip"
-              echo "✓ Downloaded successfully"
+              echo "✓ Downloaded successfully: ${downloaded_file}"
+            else
+              rm -f "rr.img.zip"
             fi
           fi
           
           # Format 4: try without v-prefix and different filename
-          if [ -z "${download_successful}" ]; then
+          if [ ${download_successful} -eq 0 ]; then
             echo "Trying download URL: ${DOWNLOAD_URL}${TAG}/rr.img.zip"
-            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}${TAG}/rr.img.zip" -o "rr.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ]; then
-              download_successful=true
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" -o "rr.img.zip" "${DOWNLOAD_URL}${TAG}/rr.img.zip" 2>/dev/null || echo "000")
+            if [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ] && [ -s "rr.img.zip" ]; then
+              download_successful=1
               downloaded_file="rr.img.zip"
-              echo "✓ Downloaded successfully"
+              echo "✓ Downloaded successfully: ${downloaded_file}"
+            else
+              rm -f "rr.img.zip"
             fi
           fi
           
           # Format 5: Try with a common release filename pattern
-          if [ -z "${download_successful}" ]; then
+          if [ ${download_successful} -eq 0 ]; then
             echo "Trying download URL: ${DOWNLOAD_URL}latest/rr.img.zip"
-            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}latest/rr.img.zip" -o "rr.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ]; then
-              download_successful=true
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" -o "rr.img.zip" "${DOWNLOAD_URL}latest/rr.img.zip" 2>/dev/null || echo "000")
+            if [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ] && [ -s "rr.img.zip" ]; then
+              download_successful=1
               downloaded_file="rr.img.zip"
-              echo "✓ Downloaded successfully"
+              echo "✓ Downloaded successfully: ${downloaded_file}"
+            else
+              rm -f "rr.img.zip"
             fi
           fi
           
           # Check if download was successful
-          if [ -z "${download_successful}" ] || [ ! -f "${downloaded_file}" ]; then
+          if [ ${download_successful} -eq 0 ] || [ -z "${downloaded_file}" ] || [ ! -f "${downloaded_file}" ]; then
             echo "❌ Download failed for all URL formats"
+            echo "TAG used: ${TAG}"
+            echo "Repository: ${REPO}"
             echo "Available files: $(ls -la *.zip 2>/dev/null || echo 'No zip files found')"
+            echo "Trying to list available releases..."
+            curl -skL --connect-timeout 10 "${REPO}/releases" | grep -oP '/releases/tag/[^"]+' | head -5 || echo "Could not list releases"
             exit 1
           fi
 
           echo "Unzipping ${downloaded_file}..."
-          # Unzip the downloaded file
-          if [ "${downloaded_file}" = "rr.img.zip" ]; then
-            # If we downloaded the generic rr.img.zip, use that directly
-            unzip "${downloaded_file}" -d rr rr.img
+          mkdir -p rr
+          # Unzip the downloaded file - try to extract rr.img from the zip
+          if ! unzip -q "${downloaded_file}" -d rr rr.img 2>/dev/null; then
+            echo "Failed to extract rr.img directly, listing zip contents..."
+            unzip -l "${downloaded_file}" | head -20
+            # Try extracting all files and find rr.img
+            unzip -q "${downloaded_file}" -d rr
+            # Look for rr.img in the extracted directory
+            if [ -f "rr/rr.img" ]; then
+              echo "✓ Found rr.img after full extraction"
+            elif [ -f "rr.img" ]; then
+              mv rr.img rr/rr.img
+              echo "✓ Found rr.img in root, moved to rr/rr.img"
+            else
+              echo "❌ Failed to find rr.img in ${downloaded_file}"
+              echo "Contents of rr directory: $(find rr -type f 2>/dev/null | head -10 || echo 'rr directory not found')"
+              exit 1
+            fi
           else
-            # Otherwise use the tagged version
-            unzip "${downloaded_file}" -d rr rr.img
+            echo "✓ Successfully extracted rr.img"
           fi
           
-          # Verify that rr/img was created
-          if [ ! -f "rr/rr.img" ]; then
-            echo "❌ Failed to extract rr.img from ${downloaded_file}"
-            echo "Contents of rr directory: $(ls -la rr 2>/dev/null || echo 'rr directory not found')"
+          # Verify that rr/rr.img was created and is not empty
+          if [ ! -f "rr/rr.img" ] || [ ! -s "rr/rr.img" ]; then
+            echo "❌ Failed to extract valid rr.img from ${downloaded_file}"
+            echo "File exists: $([ -f "rr/rr.img" ] && echo 'yes' || echo 'no')"
+            echo "File size: $(stat -f%z "rr/rr.img" 2>/dev/null || stat -c%s "rr/rr.img" 2>/dev/null || echo 'unknown')"
             exit 1
           fi
           
-          echo "✓ Successfully extracted rr.img"
+          echo "✓ Successfully extracted rr.img ($(du -h rr/rr.img | cut -f1))"
 
           echo "TAG=${TAG}" >> $GITHUB_ENV
 
