@@ -227,17 +227,36 @@ jobs:
           PRERELEASE="true"
 
           TAG=""
+          # Get the latest tag from GitHub API instead of scraping HTML
           if [ "${PRERELEASE}" = "true" ]; then
-            TAG="$(curl -skL --connect-timeout 10 "${REPO}/tags" | grep "/refs/tags/.*\.zip" | sed -E 's/.*\/refs\/tags\/(.*)\.zip.*$/\1/' | sort -rV | head -1)"
+            # Get latest tag using GitHub API
+            TAG="$(curl -skL --connect-timeout 10 -H "Accept: application/vnd.github.v3+json" "${REPO}/tags" | jq -r '.[0].name')"
           else
-            TAG="$(curl -skL --connect-timeout 10 -w "%{url_effective}" -o /dev/null "${REPO}/releases/latest" | awk -F'/' '{print $NF}')"
+            # Get latest release tag using GitHub API
+            TAG="$(curl -skL --connect-timeout 10 -H "Accept: application/vnd.github.v3+json" "${REPO}/releases/latest" | jq -r '.tag_name')"
           fi
+          
+          # Clean up tag by removing 'v' prefix if present
           [ "${TAG:0:1}" = "v" ] && TAG="${TAG:1}"
-          rm -f rr-${TAG}.img.zip
-          STATUS=$(curl -kL --connect-timeout 10 -w "%{http_code}" "${REPO}/releases/download/${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
-          if [ $? -ne 0 ] || [ ${STATUS:-0} -ne 200 ]; then
-            echo "Download failed"
+          
+          # Verify TAG was retrieved successfully
+          if [ -z "${TAG}" ]; then
+            echo "Failed to retrieve TAG"
             exit 1
+          fi
+          
+          echo "Using TAG: ${TAG}"
+          rm -f rr-${TAG}.img.zip
+          
+          # Download the file with proper error handling
+          STATUS=$(curl -kL --connect-timeout 10 -w "%{http_code}" "${REPO}/releases/download/v${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
+          if [ $? -ne 0 ] || [ ${STATUS:-0} -ne 200 ]; then
+            # Try without 'v' prefix in download URL if first attempt fails
+            STATUS=$(curl -kL --connect-timeout 10 -w "%{http_code}" "${REPO}/releases/download/${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
+            if [ $? -ne 0 ] || [ ${STATUS:-0} -ne 200 ]; then
+              echo "Download failed for both v${TAG} and ${TAG}"
+              exit 1
+            fi
           fi
 
           unzip rr-${TAG}.img.zip -d rr rr.img
