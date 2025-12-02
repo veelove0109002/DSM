@@ -225,18 +225,21 @@ jobs:
 
           . scripts/func.sh "${{ secrets.RRORG }}"
 
-          REPO="${{ github.server_url }}/${{ github.repository }}"
+          # Use upstream repository for tags/releases so forks without tags still work
+          UPSTREAM_OWNER="RROrg"
+          UPSTREAM_REPO="DSM"
+          REPO="https://github.com/${UPSTREAM_OWNER}/${UPSTREAM_REPO}"
           PRERELEASE="true"
 
           TAG=""
           
-          # Method 1: Try GitHub API for tags (for prerelease)
+          # Method 1: Try GitHub API for tags (for prerelease) from upstream repo
           if [ "${PRERELEASE}" = "true" ]; then
-            echo "Attempting to get latest tag from GitHub API..."
-            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/tags" | jq -r '.[0].name // empty')"
+            echo "Attempting to get latest tag from upstream GitHub API..."
+            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/tags" | jq -r '.[0].name // empty')"
           else
-            echo "Attempting to get latest release from GitHub API..."
-            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.tag_name // empty')"
+            echo "Attempting to get latest release from upstream GitHub API..."
+            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest" | jq -r '.tag_name // empty')"
           fi
           
           # Method 2: Try parsing HTML tags page (fallback)
