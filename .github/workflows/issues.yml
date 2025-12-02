@@ -264,49 +264,88 @@ jobs:
           
           # Try multiple download URL formats
           download_successful=false
+          downloaded_file=""
           
           # Format 1: with v-prefix in tag and URL
           if [ -z "${download_successful}" ]; then
+            echo "Trying download URL: ${DOWNLOAD_URL}v${TAG}/rr-${TAG}.img.zip"
             STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}v${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ]; then
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr-${TAG}.img.zip" ]; then
               download_successful=true
-              echo "Downloaded with URL format: ${DOWNLOAD_URL}v${TAG}/rr-${TAG}.img.zip"
+              downloaded_file="rr-${TAG}.img.zip"
+              echo "✓ Downloaded successfully"
             fi
           fi
           
           # Format 2: without v-prefix
           if [ -z "${download_successful}" ]; then
+            echo "Trying download URL: ${DOWNLOAD_URL}${TAG}/rr-${TAG}.img.zip"
             STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ]; then
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr-${TAG}.img.zip" ]; then
               download_successful=true
-              echo "Downloaded with URL format: ${DOWNLOAD_URL}${TAG}/rr-${TAG}.img.zip"
+              downloaded_file="rr-${TAG}.img.zip"
+              echo "✓ Downloaded successfully"
             fi
           fi
           
           # Format 3: try with different filename pattern (without TAG in filename)
           if [ -z "${download_successful}" ]; then
-            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}v${TAG}/rr.img.zip" -o "rr-${TAG}.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ]; then
+            echo "Trying download URL: ${DOWNLOAD_URL}v${TAG}/rr.img.zip"
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}v${TAG}/rr.img.zip" -o "rr.img.zip")
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ]; then
               download_successful=true
-              echo "Downloaded with URL format: ${DOWNLOAD_URL}v${TAG}/rr.img.zip"
+              downloaded_file="rr.img.zip"
+              echo "✓ Downloaded successfully"
             fi
           fi
           
           # Format 4: try without v-prefix and different filename
           if [ -z "${download_successful}" ]; then
-            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}${TAG}/rr.img.zip" -o "rr-${TAG}.img.zip")
-            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ]; then
+            echo "Trying download URL: ${DOWNLOAD_URL}${TAG}/rr.img.zip"
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}${TAG}/rr.img.zip" -o "rr.img.zip")
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ]; then
               download_successful=true
-              echo "Downloaded with URL format: ${DOWNLOAD_URL}${TAG}/rr.img.zip"
+              downloaded_file="rr.img.zip"
+              echo "✓ Downloaded successfully"
             fi
           fi
           
+          # Format 5: Try with a common release filename pattern
           if [ -z "${download_successful}" ]; then
-            echo "Download failed for all URL formats"
+            echo "Trying download URL: ${DOWNLOAD_URL}latest/rr.img.zip"
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}latest/rr.img.zip" -o "rr.img.zip")
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ] && [ -f "rr.img.zip" ]; then
+              download_successful=true
+              downloaded_file="rr.img.zip"
+              echo "✓ Downloaded successfully"
+            fi
+          fi
+          
+          # Check if download was successful
+          if [ -z "${download_successful}" ] || [ ! -f "${downloaded_file}" ]; then
+            echo "❌ Download failed for all URL formats"
+            echo "Available files: $(ls -la *.zip 2>/dev/null || echo 'No zip files found')"
             exit 1
           fi
 
-          unzip rr-${TAG}.img.zip -d rr rr.img
+          echo "Unzipping ${downloaded_file}..."
+          # Unzip the downloaded file
+          if [ "${downloaded_file}" = "rr.img.zip" ]; then
+            # If we downloaded the generic rr.img.zip, use that directly
+            unzip "${downloaded_file}" -d rr rr.img
+          else
+            # Otherwise use the tagged version
+            unzip "${downloaded_file}" -d rr rr.img
+          fi
+          
+          # Verify that rr/img was created
+          if [ ! -f "rr/rr.img" ]; then
+            echo "❌ Failed to extract rr.img from ${downloaded_file}"
+            echo "Contents of rr directory: $(ls -la rr 2>/dev/null || echo 'rr directory not found')"
+            exit 1
+          fi
+          
+          echo "✓ Successfully extracted rr.img"
 
           echo "TAG=${TAG}" >> $GITHUB_ENV
 
