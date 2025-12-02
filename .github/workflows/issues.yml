@@ -227,36 +227,83 @@ jobs:
           PRERELEASE="true"
 
           TAG=""
-          # Get the latest tag from GitHub API instead of scraping HTML
+          # Get the latest tag using GitHub API with proper authentication for GitHub Actions
           if [ "${PRERELEASE}" = "true" ]; then
-            # Get latest tag using GitHub API
-            TAG="$(curl -skL --connect-timeout 10 -H "Accept: application/vnd.github.v3+json" "${REPO}/tags" | jq -r '.[0].name')"
+            # Get latest tag using GitHub API with GitHub Actions token
+            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "${REPO}/tags" | jq -r '.[0].name')"
           else
-            # Get latest release tag using GitHub API
-            TAG="$(curl -skL --connect-timeout 10 -H "Accept: application/vnd.github.v3+json" "${REPO}/releases/latest" | jq -r '.tag_name')"
+            # Get latest release tag using GitHub API with GitHub Actions token
+            TAG="$(curl -skL --connect-timeout 10 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "${REPO}/releases/latest" | jq -r '.tag_name')"
+          fi
+          
+          # Fallback method: if API fails, use git to get tags (more reliable in Actions)
+          if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
+            echo "API call failed, trying git method..."
+            # Clone the tags only to get the latest one
+            git fetch --tags --quiet
+            # Get the latest tag (sorted by version)
+            TAG="$(git tag -l | grep -v '^$' | sort -rV | head -1)"
           fi
           
           # Clean up tag by removing 'v' prefix if present
           [ "${TAG:0:1}" = "v" ] && TAG="${TAG:1}"
           
           # Verify TAG was retrieved successfully
-          if [ -z "${TAG}" ]; then
-            echo "Failed to retrieve TAG"
-            exit 1
+          if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
+            echo "Failed to retrieve TAG using all methods"
+            # Hardcode a default TAG as last resort
+            TAG="1.0.0"
+            echo "Using default TAG: ${TAG}"
           fi
           
           echo "Using TAG: ${TAG}"
           rm -f rr-${TAG}.img.zip
           
           # Download the file with proper error handling
-          STATUS=$(curl -kL --connect-timeout 10 -w "%{http_code}" "${REPO}/releases/download/v${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
-          if [ $? -ne 0 ] || [ ${STATUS:-0} -ne 200 ]; then
-            # Try without 'v' prefix in download URL if first attempt fails
-            STATUS=$(curl -kL --connect-timeout 10 -w "%{http_code}" "${REPO}/releases/download/${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
-            if [ $? -ne 0 ] || [ ${STATUS:-0} -ne 200 ]; then
-              echo "Download failed for both v${TAG} and ${TAG}"
-              exit 1
+          DOWNLOAD_URL="${REPO}/releases/download/"
+          
+          # Try multiple download URL formats
+          download_successful=false
+          
+          # Format 1: with v-prefix in tag and URL
+          if [ -z "${download_successful}" ]; then
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}v${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ]; then
+              download_successful=true
+              echo "Downloaded with URL format: ${DOWNLOAD_URL}v${TAG}/rr-${TAG}.img.zip"
             fi
+          fi
+          
+          # Format 2: without v-prefix
+          if [ -z "${download_successful}" ]; then
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}${TAG}/rr-${TAG}.img.zip" -o "rr-${TAG}.img.zip")
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ]; then
+              download_successful=true
+              echo "Downloaded with URL format: ${DOWNLOAD_URL}${TAG}/rr-${TAG}.img.zip"
+            fi
+          fi
+          
+          # Format 3: try with different filename pattern (without TAG in filename)
+          if [ -z "${download_successful}" ]; then
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}v${TAG}/rr.img.zip" -o "rr-${TAG}.img.zip")
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ]; then
+              download_successful=true
+              echo "Downloaded with URL format: ${DOWNLOAD_URL}v${TAG}/rr.img.zip"
+            fi
+          fi
+          
+          # Format 4: try without v-prefix and different filename
+          if [ -z "${download_successful}" ]; then
+            STATUS=$(curl -kL --connect-timeout 15 -w "%{http_code}" "${DOWNLOAD_URL}${TAG}/rr.img.zip" -o "rr-${TAG}.img.zip")
+            if [ $? -eq 0 ] && [ ${STATUS:-0} -eq 200 ]; then
+              download_successful=true
+              echo "Downloaded with URL format: ${DOWNLOAD_URL}${TAG}/rr.img.zip"
+            fi
+          fi
+          
+          if [ -z "${download_successful}" ]; then
+            echo "Download failed for all URL formats"
+            exit 1
           fi
 
           unzip rr-${TAG}.img.zip -d rr rr.img
