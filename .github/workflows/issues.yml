@@ -272,12 +272,13 @@ jobs:
             [ "${TAG:0:1}" = "v" ] && TAG="${TAG:1}"
           fi
           
-          # Verify TAG was retrieved successfully
+          # Verify TAG was retrieved successfully; if not, fall back to 'latest'
           if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
-            echo "❌ Failed to retrieve TAG using all methods"
+            echo "⚠️ Failed to determine a specific TAG via API/HTML/git."
             echo "Available git tags: $(git tag -l | head -5 || echo 'none')"
-            echo "Repository: ${REPO}"
-            exit 1
+            echo "Repository (used for downloads): ${REPO}"
+            echo "Falling back to GitHub 'latest' release endpoint."
+            TAG="latest"
           fi
           
           echo "✓ Using TAG: ${TAG}"
